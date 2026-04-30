@@ -1,1 +1,91 @@
+def main(auto=False):
+    """Main game loop: authentication, play 5 rounds, handle tie and record winner.
+
+    If `auto` is True the program will try to pick existing players automatically
+    to allow a non-interactive demo run when possible.
+    """
+    random.seed()  # seed RNG from system time (default behaviour)
+    players = load_players()  # load authorised players
+    print('\nWELCOME TO THE DICE ROLLER GAME')
+
+    # If there are no players yet, prompt to create two accounts
+    if not players:
+        print('No authorised players found — create two player accounts now.')
+        for i in (1, 2):
+            while True:
+                name = input(f'Create username for player {i}: ').strip()
+                pw = getpass.getpass('Password: ')
+                if name in players:
+                    print('That username already exists. Pick another.')
+                    continue
+                register_player(name, pw, players)
+                break
+        print('Two players registered. Restart the program to login, or continue to play now.')
+
+    # Login two players (with an option to auto-select existing users)
+    print('\nPlayer 1 login:')
+    if auto and len(players) >= 1:
+        p1 = list(players.keys())[0]  # pick first user in file
+        print(f'(auto) Using player: {p1}')
+    else:
+        p1 = prompt_credentials(players)
+
+    print('\nPlayer 2 login:')
+    if auto and len(players) >= 2:
+        p2 = list(players.keys())[1]  # pick second user in file
+        # avoid accidentally selecting the same user twice
+        if p2 == p1 and len(players) > 2:
+            p2 = list(players.keys())[2]
+        print(f'(auto) Using player: {p2}')
+    else:
+        while True:
+            p2 = prompt_credentials(players)
+            if p2 == p1:
+                print('Player 2 must be a different user than Player 1. Try again.')
+                continue
+            break
+
+    # initialise scores and number of rounds
+    scores = {p1: 0, p2: 0}
+    rounds = 5
+    print(f'\nStarting {rounds} rounds. Each player rolls two 6-sided dice per round.')
+
+    # play the requested number of rounds
+    for r in range(1, rounds + 1):
+        print(f'\n--- Round {r} ---')
+        # Player 1 rolls two dice and we add the round score
+        s1 = play_round(p1)
+        scores[p1] += s1
+        # Player 2 rolls two dice and we add the round score
+        s2 = play_round(p2)
+        scores[p2] += s2
+        # show running totals after each round
+        print(f'After round {r}: {p1} = {scores[p1]} pts, {p2} = {scores[p2]} pts')
+
+    # final totals after all rounds
+    print('\n--- Final after 5 rounds ---')
+    print(f'{p1}: {scores[p1]} pts')
+    print(f'{p2}: {scores[p2]} pts')
+
+    # if tied, go to sudden death; otherwise declare winner
+    if scores[p1] == scores[p2]:
+        winner, wval, lval = sudden_death(p1, p2)
+        print(f'Winner by sudden death: {winner} (rolled {wval} vs {lval})')
+        # add the sudden-death winning roll to the winner's total for record
+        winner_score = max(scores[p1], scores[p2]) + (wval if winner == p1 else lval)
+    else:
+        winner = p1 if scores[p1] > scores[p2] else p2
+        winner_score = scores[winner]
+
+    # final announcement and persistence to leaderboard
+    print(f'\nGAME OVER — Winner: {winner} with {winner_score} points')
+    record_winner(winner, winner_score)
+    show_top_n(5)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--auto', action='store_true', help='Run in demo mode (non-interactive when possible)')
+    args = parser.parse_args()
+    main(auto=args.auto)
 
