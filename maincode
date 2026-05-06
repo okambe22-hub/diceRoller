@@ -1,7 +1,155 @@
+import json  # read/write JSON files for players and leaderboard
+import os  # path handling and file existence checks
+import random  # random numbers for dice rolls
+import hashlib  # simple password hashing (salt + sha256)
+import getpass  # securely prompt for passwords (no echo)
+import datetime  # timestamp winners
+import argparse  
+
+
+DATA_DIR = os.path.dirname(__file__)  # directory where this script lives
+PLAYERS_FILE = os.path.join(DATA_DIR, 'players.json')  # file to persist authorised players
+LEADERBOARD_FILE = os.path.join(DATA_DIR, 'leaderboard.json')  # file to persist winners
+
+
+def hash_password(password: str, salt: str) -> str:
+    """Return a hex sha256 hash of the salt + password.
+
+    This is a simple one-way hash used only to avoid storing plain-text
+    
+    """
+    # combine salt and password, encode to bytes and hash
+    return hashlib.sha256((salt + password).encode('utf-8')).hexdigest()
+
+
+def load_players():
+    """Load players from disk, return an empty dict if file missing."""
+    # if players file doesn't exist yet, return empty mapping
+    if not os.path.exists(PLAYERS_FILE):
+        return {}
+    # otherwise open and parse the JSON file
+    with open(PLAYERS_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def save_players(players):
+    """Save players mapping to the players file as JSON."""
+    with open(PLAYERS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(players, f, indent=2)
+
+
+def load_leaderboard():
+    """Load leaderboard list from disk, return empty list if missing."""
+    if not os.path.exists(LEADERBOARD_FILE):
+        return []
+    with open(LEADERBOARD_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+
+def save_leaderboard(board):
+    """Persist leaderboard list to disk as JSON."""
+    with open(LEADERBOARD_FILE, 'w', encoding='utf-8') as f:
+        json.dump(board, f, indent=2)
+
+
+def register_player(username: str, password: str, players: dict):
+    """Create a new player entry with a random salt and hashed password.
+
+    This updates the in-memory mapping and writes it to disk.
+    """
+    salt = os.urandom(8).hex()  # generate a small random salt
+    players[username] = {'salt': salt, 'hash': hash_password(password, salt)}
+    save_players(players)  # persist the new user
+
+
+def authenticate(username: str, password: str, players: dict) -> bool:
+    """Return True if the username exists and the password matches."""
+    user = players.get(username)  # look up user entry
+    if not user:
+        return False  # no such user
+    # compare stored hash with hash of supplied password + stored salt
+    return user['hash'] == hash_password(password, user['salt'])
+
+
+def prompt_credentials(players: dict, allow_register: bool = True):
+    """Prompt the user for username/password until they authenticate or register.
+
+    If allow_register is True, offer to create an account with the supplied
+    credentials when authentication fails.
+    """
+    while True:
+        username = input('Username: ').strip()  # prompt username and strip whitespace
+        # use getpass so passwords don't echo on screen
+        password = getpass.getpass('Password: ')
+        if authenticate(username, password, players):
+            print('Authenticated.')
+            return username
+        # if authentication fails optionally register a new account
+        if allow_register:
+            print(f'User not found or wrong password for "{username}".')
+            choice = input('Register new user with these credentials? (y/n): ').strip().lower()
+            if choice == 'y':
+                register_player(username, password, players)
+                print(f'User "{username}" registered and authenticated.')
+                return username
+        else:
+            print('Authentication failed. Try again.')
+
+
+def roll_die(sides=6):
+    """Return a random integer between 1 and `sides` inclusive (default 6)."""
+    return random.randint(1, sides)
+
+
+def play_round(player_name: str):
+    """Simulate a single round for a player: roll two dice and return the total."""
+    d1 = roll_die()  # first die
+    d2 = roll_die()  # second die
+    total = d1 + d2  # round points
+    print(f'{player_name} rolled {d1} and {d2} => {total} points this round')
+    return total
+
+
+def sudden_death(player1: str, player2: str):
+    """Resolve ties by letting each player roll one die until someone wins.
+
+    Returns a tuple: (winner_name, winner_roll, loser_roll)
+    """
+    print('\nSudden death: each player rolls one die until someone wins')
+    while True:
+        r1 = roll_die()  # player1s roll
+        r2 = roll_die()  # player2s roll
+        print(f'{player1} rolled {r1}  |  {player2} rolled {r2}')
+        if r1 > r2:
+            return player1, r1, r2
+        if r2 > r1:
+            return player2, r2, r1
+        # if equal loop again
+        print('Tie in sudden death — rolling again...')
+
+
+def record_winner(name: str, score: int):
+    """Append a winner entry to the leaderboard file with timestamp."""
+    board = load_leaderboard()  # read existing entries
+    board.append({'name': name, 'score': score, 'time': datetime.datetime.utcnow().isoformat()})
+    # keep file growth reasonable by not trimming here; sorting happens on display
+    save_leaderboard(board)
+
+
+def show_top_n(n=5):
+    """Display the topn scores from the leaderboard file (highest first)."""
+    board = load_leaderboard()  # load entries
+    board_sorted = sorted(board, key=lambda x: x['score'], reverse=True)  # sort by score desc
+    print(f'\nTop {n} scores:')
+    for i, entry in enumerate(board_sorted[:n], start=1):
+        t = entry.get('time','')  # optional timestamp
+        print(f'{i}. {entry["name"]} — {entry["score"]} pts ({t})')
+
+
 def main(auto=False):
     """Main game loop: authentication, play 5 rounds, handle tie and record winner.
 
-    If `auto` is True the program will try to pick existing players automatically
+    If auto is true the program will try to pick existing players automatically
     to allow a non-interactive demo run when possible.
     """
     random.seed()  # seed RNG from system time (default behaviour)
@@ -22,7 +170,7 @@ def main(auto=False):
                 break
         print('Two players registered. Restart the program to login, or continue to play now.')
 
-    # Login two players (with an option to auto-select existing users)
+    # Login two players with an option to auto-select existing users
     print('\nPlayer 1 login:')
     if auto and len(players) >= 1:
         p1 = list(players.keys())[0]  # pick first user in file
@@ -67,11 +215,11 @@ def main(auto=False):
     print(f'{p1}: {scores[p1]} pts')
     print(f'{p2}: {scores[p2]} pts')
 
-    # if tied, go to sudden death; otherwise declare winner
+    # if tied go to sudden death otherwise declare winner
     if scores[p1] == scores[p2]:
         winner, wval, lval = sudden_death(p1, p2)
         print(f'Winner by sudden death: {winner} (rolled {wval} vs {lval})')
-        # add the sudden-death winning roll to the winner's total for record
+        # add the sudden death winning roll to the winners total for record
         winner_score = max(scores[p1], scores[p2]) + (wval if winner == p1 else lval)
     else:
         winner = p1 if scores[p1] > scores[p2] else p2
@@ -85,7 +233,6 @@ def main(auto=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--auto', action='store_true', help='Run in demo mode (non-interactive when possible)')
+    parser.add_argument('--auto', action='store_true')
     args = parser.parse_args()
     main(auto=args.auto)
-
